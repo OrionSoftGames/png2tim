@@ -60,7 +60,7 @@ void	Utils_Write16(FILE *f, uint16_t data)
 
 int main(int argc, char *argv[])
 {
-	uint8_t		*filename = NULL, *ig, *ptr, stp = 0;
+	uint8_t		*filename = NULL, *ig, *ptr, black_t = 0;
 	int			i, igw, igh, bpp, vramW, cx = 0, cy = 0, px = 0, py = 0;
 	char		timname[256];
 	uint32_t	palette[256];
@@ -73,7 +73,7 @@ int main(int argc, char *argv[])
 			switch (argv[i][1])
 			{
 				case 't':	// Semi transparent bit
-					stp = 1;
+					black_t = 1;
 				break;
 
 				case 'p':	// Pixel position
@@ -115,12 +115,12 @@ int main(int argc, char *argv[])
 	if (!filename)
 		goto usage;
 
-	ig = LoadPNG(filename, LCT_RGB, 8, NULL, &igw, &igh, NULL, &bpp);
+	ig = LoadPNG(filename, LCT_RGBA, 8, NULL, &igw, &igh, NULL, &bpp);
 	if (ig)
 	{
 		FILE	*out;
 
-		if (bpp == 24)
+		if (bpp >= 24)
 			bpp = 16;
 		vramW = (igw * bpp) / 16;
 
@@ -155,7 +155,7 @@ int main(int argc, char *argv[])
 		if (out)
 		{
 			int		size;
-			uint8_t	*outdata;
+			uint8_t	*outdata, r, g, b, a;
 
 			size = (igw * igh * bpp) / 8;
 			outdata = malloc(size);
@@ -172,13 +172,13 @@ int main(int argc, char *argv[])
 				Utils_Write16(out, 1);
 				for (i = 0; i < (1 << bpp); i++)
 				{
-					uint8_t		r, g, b;
 					uint16_t	color;
 
 					r = palette[i] & 0xFF;
 					g = (palette[i] >> 8) & 0xFF;
 					b = (palette[i] >> 16) & 0xFF;
-					color = ((b >> (8-5)) << 10) | ((g >> (8-5)) << 5) | (r >> (8-5)) | (stp << 15);
+					a = black_t ? 0 : ((palette[i] >> 24) & 0xFF);
+					color = ((b >> (8-5)) << 10) | ((g >> (8-5)) << 5) | (r >> (8-5)) | ((a ? 1 : 0) << 15);
 					Utils_Write16(out, color);
 				}
 				if (bpp == 4)	// invert 4bits pixels data from PNG output
@@ -194,9 +194,15 @@ int main(int argc, char *argv[])
 				uint16_t	*outdata16 = (uint16_t*)outdata;
 
 				Utils_Write32(out, 2);	// 15bits image flag
-				// convert 24bits PNG pixels data to 16bits pixel PS1 format A1B5G5R5
+				// convert 32bits PNG pixels data to 16bits pixel PS1 format A1B5G5R5
 				for (i = 0; i < igw * igh; i++)
-					outdata16[i] = ((ig[(i*3)+2] >> (8-5)) << 10) | ((ig[(i*3)+1] >> (8-5)) << 5) | (ig[i*3] >> (8-5)) | (stp << 15);
+				{
+					r = ig[i*4];
+					g = ig[(i*4)+1];
+					b = ig[(i*4)+2];
+					a = black_t ? 0 : ig[(i*4)+3];
+					outdata16[i] = ((b >> (8-5)) << 10) | ((g >> (8-5)) << 5) | (r >> (8-5)) | ((a ? 1 : 0) << 15);
+				}
 			}
 
 			Utils_Write32(out, 4+4+4+size);	// bnum
@@ -222,12 +228,12 @@ int main(int argc, char *argv[])
 	return (0);
 
 usage:
-	printf("PNG TO TIM convert utility - by Orion_ [2024]\nhttps://orionsoft.games/\n\n");
-	printf("Usage: png2tim [-p x y|-c x y|-t] file.png\n\n");
-	printf("PNG file supported 4/8/24bits. TIM format output 4/8/16bits only.\n"
+	printf("PNG TO TIM convert utility v0.2 - by Orion_ [2024]\nhttps://orionsoft.games/\n\n");
+	printf("Usage: png2tim [-p x y|-c x y] file.png\n\n");
+	printf("PNG file supported 4/8/24/32bits. TIM format output 4/8/16bits only.\n"
 			"Use -p x y option to specify pixel x y position in vram.\n"
 			"Use -c x y option to specify CLUT (palette) x y position in vram.\n"
-			"Use -t option to set semi-transparent bit in 16bits pixels or palette.\n");
+			"Use -t option to force black color to be transparent (override alpha layer from PNG).\n");
 
 	return (0);
 }
