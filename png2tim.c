@@ -61,7 +61,7 @@ void	Utils_Write16(FILE *f, uint16_t data)
 int main(int argc, char *argv[])
 {
 	uint8_t		*filename = NULL, *ig, *ptr, black_t = 0;
-	int			i, igw, igh, bpp, vramW, cx = 0, cy = 0, px = 0, py = 0;
+	int			i, igw, igh, bpp, vramW, cx = 0, cy = 0, px = 0, py = 0, tw = -1, th = -1;
 	char		timname[256];
 	uint32_t	palette[256];
 
@@ -103,6 +103,20 @@ int main(int argc, char *argv[])
 						goto usage;
 					}
 				break;
+
+				case 'm':	// Multiple CLUTs w/h tile size
+					if (argc >= i + 2)
+					{
+						tw = atoi(argv[i + 1]);
+						th = atoi(argv[i + 2]);
+						i += 2;
+					}
+					else
+					{
+						printf("-m option needs w h parameters following\n");
+						goto usage;
+					}
+				break;
 			}
 		}
 		else
@@ -119,6 +133,13 @@ int main(int argc, char *argv[])
 	if (ig)
 	{
 		FILE	*out;
+
+		if (((tw > 0) || (th > 0)) && (bpp != 8))
+		{
+			printf("Multiple CLUT mode require 8bpp input image !\n");
+			free(ig);
+			goto usage;
+		}
 
 		if (bpp >= 24)
 			bpp = 16;
@@ -164,7 +185,14 @@ int main(int argc, char *argv[])
 			Utils_Write32(out, 0x10);	// ID
 			if (bpp != 16)	// 4/8bits CLUT/palette based image
 			{
+				if ((tw > 0) || (th > 0))
+					bpp = 4;
 				Utils_Write32(out, (1<<3) | ((bpp == 4) ? 0 : 1));	// flags
+				if ((tw > 0) || (th > 0))
+				{
+					bpp = 8;
+					size /= 2;
+				}
 				Utils_Write32(out, 4+4+4+(2*(1 << bpp)));	// bnum
 				Utils_Write16(out, cx);
 				Utils_Write16(out, cy);
@@ -172,12 +200,26 @@ int main(int argc, char *argv[])
 				Utils_Write16(out, 1);
 				for (i = 0; i < (1 << bpp); i++)
 				{
-					uint16_t	color;
+					uint16_t	color, j;
 
-					r = palette[i] & 0xFF;
-					g = (palette[i] >> 8) & 0xFF;
-					b = (palette[i] >> 16) & 0xFF;
-					a = black_t ? 0 : ((palette[i] >> 24) & 0xFF);
+					if ((tw > 0) || (th > 0))	// Multiple CLUT mode, write CLUT in the order of the tile size
+					{
+						uint16_t	ipx = ((i >> 4) % (igw / tw)) * tw;
+						uint16_t	ipy = ((i >> 4) / (igw / tw)) * th;
+
+						if ((ipx > igw) || (ipy > igh))
+							j = 0;
+						else
+							//  Low 4bits index + Image palette index of this tile in the order of tile left to right / up to bottom (if that makes sense, maybe only to me ...)
+							j = (i & 0xF) + (ig[ipx + (ipy * igw)] & 0xF0);
+					}
+					else
+						j = i;
+
+					r = palette[j] & 0xFF;
+					g = (palette[j] >> 8) & 0xFF;
+					b = (palette[j] >> 16) & 0xFF;
+					a = black_t ? 0 : ((palette[j] >> 24) & 0xFF);
 					color = ((b >> (8-5)) << 10) | ((g >> (8-5)) << 5) | (r >> (8-5)) | ((a ? 1 : 0) << 15);
 					Utils_Write16(out, color);
 				}
@@ -186,8 +228,17 @@ int main(int argc, char *argv[])
 					for (i = 0; i < size; i++)
 						outdata[i] = ((ig[i] >> 4) & 0xF) | ((ig[i] & 0xF) << 4);
 				}
-				else	// straight copy of 8bits pixels data from PNG output
-					memcpy(outdata, ig, size);
+				else
+				{
+					if ((tw > 0) || (th > 0))
+					{
+						// Convert 8bits to 4bits for Multiple CLUT mode
+						for (i = 0; i < size; i++)
+							outdata[i] = (ig[i+i] & 0xF) | ((ig[i+i+1] & 0xF) << 4);
+					}
+					else
+						memcpy(outdata, ig, size);	// straight copy of 8bits pixels data from PNG output
+				}
 			}
 			else
 			{
@@ -208,7 +259,10 @@ int main(int argc, char *argv[])
 			Utils_Write32(out, 4+4+4+size);	// bnum
 			Utils_Write16(out, px);
 			Utils_Write16(out, py);
-			Utils_Write16(out, (igw * bpp) / 16);
+			if ((tw > 0) || (th > 0))
+				Utils_Write16(out, ((igw * bpp) / 16) / 2);
+			else
+				Utils_Write16(out, (igw * bpp) / 16);
 			Utils_Write16(out, igh);
 
 			fwrite(outdata, 1, size, out);
@@ -228,12 +282,13 @@ int main(int argc, char *argv[])
 	return (0);
 
 usage:
-	printf("PNG TO TIM convert utility v0.2 - by Orion_ [2024]\nhttps://orionsoft.games/\n\n");
+	printf("PNG TO TIM convert utility v0.3 - by Orion_ [2024-2026]\nhttps://orionsoft.games/\n\n");
 	printf("Usage: png2tim [-p x y|-c x y] file.png\n\n");
 	printf("PNG file supported 4/8/24/32bits. TIM format output 4/8/16bits only.\n"
 			"Use -p x y option to specify pixel x y position in vram.\n"
 			"Use -c x y option to specify CLUT (palette) x y position in vram.\n"
-			"Use -t option to force black color to be transparent (override alpha layer from PNG).\n");
+			"Use -t option to force black color to be transparent (override alpha layer from PNG).\n"
+			"Use -m w h option to create a 4bits TIM image that uses up to 16 CLUTs from a 8bits input PNG image.\n");
 
 	return (0);
 }
